@@ -119,6 +119,28 @@ def assign_series_from_patterns(title) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Supplement for series absent from or missing subgenre in gamegenre.md.
+# Keys are normalized series names (match what normalize_title() produces).
+# Values use None to mean "keep whatever gamegenre.md already assigned".
+# ---------------------------------------------------------------------------
+_SERIES_GENRE_SUPPLEMENT: dict[str, dict] = {
+    # Eidos titles — not in gamegenre.md
+    "tomb raider":      {"genre": "Action-Adventure",  "subgenre": "Third-Person Action / Platformer"},
+    "deus ex":          {"genre": "Action-Adventure",  "subgenre": "First-Person RPG / Immersive Sim"},
+    "hitman":           {"genre": "Action",             "subgenre": "Stealth / Third-Person"},
+    "thief":            {"genre": "Action-Adventure",  "subgenre": "Stealth / First-Person"},
+    "legacy of kain":   {"genre": "Action-Adventure",  "subgenre": "Hack-and-Slash / Dark Fantasy"},
+    "soul blazer":      {"genre": "Action RPG",        "subgenre": "Top-Down / God Game Hybrid"},
+    "xenogears":        {"genre": "RPG",               "subgenre": "Turn-Based RPG / Mecha"},
+    "marvel":           {"genre": "Action",             "subgenre": "Brawler / Third-Person Action"},
+    "outriders":        {"genre": "Shooter",           "subgenre": "Third-Person Shooter / Action RPG"},
+    # Present in gamegenre.md but subgenre block missing
+    "life is strange":  {"genre": None,                "subgenre": "Graphic Adventure / Narrative Choice"},
+    "chaos rings":      {"genre": None,                "subgenre": "Turn-Based RPG / Mobile"},
+}
+
+
+# ---------------------------------------------------------------------------
 # Parse best-selling games table from salesdata.md
 # Returns: {normalized_title: sales_in_millions}
 # ---------------------------------------------------------------------------
@@ -193,23 +215,70 @@ def _parse_revenue(path: Path) -> dict[str, str]:
 # Expected format: tab-separated rows with title, genre, subgenre columns
 # ---------------------------------------------------------------------------
 def _parse_gamegenre(path: Path) -> dict[str, dict]:
+    """
+    Parse franchise-organized markdown in gamegenre.md.
+    Returns {normalized_series_name: {genre, subgenre}}.
+    """
     if not path.exists() or path.stat().st_size == 0:
         return {}
 
     text = path.read_text(encoding="utf-8")
     overrides: dict[str, dict] = {}
 
-    for line in text.splitlines():
-        parts = [p.strip() for p in line.split("\t")]
-        if len(parts) < 2 or parts[0].lower() in ("title", "game", ""):
-            continue
-        title_key = normalize_title(parts[0])
-        overrides[title_key] = {
-            "genre": parts[1] if len(parts) > 1 else None,
-            "subgenre": parts[2] if len(parts) > 2 else None,
-        }
+    current_genre: str | None = None
+    current_subgenre: str | None = None
 
-    logger.info("gamegenre.md: loaded %d genre overrides", len(overrides))
+    _emoji_re = re.compile(r"[^\x00-\x7F -~]+")
+    _paren_re = re.compile(r"\s*\(.*?\)")
+
+    for line in text.splitlines():
+        stripped = line.strip()
+
+        # ## Genre header
+        if stripped.startswith("## "):
+            raw = stripped[3:].strip()
+            raw = _emoji_re.sub("", raw).strip()
+            # Prefer short label in parens, e.g. "Role-Playing Games (RPG)" → "RPG"
+            paren_match = re.search(r"\(([^)]+)\)", raw)
+            current_genre = paren_match.group(1).strip() if paren_match else raw
+            current_subgenre = None
+            continue
+
+        # **Subgenre** bold block
+        if stripped.startswith("**") and stripped.endswith("**"):
+            current_subgenre = stripped[2:-2].strip()
+            continue
+
+        # - Franchise bullet
+        if stripped.startswith("- ") and current_genre:
+            raw_name = stripped[2:].strip()
+            # Remove parenthetical notes: "Final Fantasy (I–XVI + spin-offs)" → "Final Fantasy"
+            name = _paren_re.sub("", raw_name).strip()
+            # Strip trailing " series" / " Series"
+            name = re.sub(r"\s+[Ss]eries$", "", name).strip()
+            # Strip trailing " / ..." variants like "Nier / Nier: Automata / Nier Replicant"
+            # Take only the first slash-separated part if present
+            name = name.split(" / ")[0].strip()
+
+            key = normalize_title(name)
+            if key and key not in overrides:
+                overrides[key] = {
+                    "genre": current_genre,
+                    "subgenre": current_subgenre,
+                }
+
+    # Merge supplement: add missing series; fill None genre/subgenre on existing entries
+    for key, sup in _SERIES_GENRE_SUPPLEMENT.items():
+        if key not in overrides:
+            overrides[key] = sup
+        else:
+            existing = overrides[key]
+            if sup.get("genre") and not existing.get("genre"):
+                existing["genre"] = sup["genre"]
+            if sup.get("subgenre") and not existing.get("subgenre"):
+                existing["subgenre"] = sup["subgenre"]
+
+    logger.info("gamegenre.md: loaded %d series genre mappings (incl. supplement)", len(overrides))
     return overrides
 
 
@@ -247,16 +316,40 @@ def enrich_from_manual_data(df: pd.DataFrame) -> pd.DataFrame:
     if revenue and "title_key" in df.columns:
         df["gross_revenue"] = df["title_key"].map(revenue)
 
-    # --- 4. Genre overrides from gamegenre.md ---
-    genre_overrides = _parse_gamegenre(GAMEGENRE_PATH)
-    if genre_overrides and "title_key" in df.columns:
+    # --- 4. Genre overrides from gamegenre.md (matched on series, not title) ---
+    genre_map = _parse_gamegenre(GAMEGENRE_PATH)
+    if genre_map and "series" in df.columns:
+        for col in ("genre", "subgenre"):
+            if col not in df.columns:
+                df[col] = None
+
+        # Build prefix-match cache: for each series key seen, find best genre_map key.
+        # Exact match wins; else look for a genre_map key that is a prefix of series_key
+        # or series_key is a prefix of a genre_map key (e.g. "bravely" → "bravely default").
+        _series_cache: dict[str, dict] = {}
+
+        def _lookup_series(series_key: str) -> dict:
+            if series_key in _series_cache:
+                return _series_cache[series_key]
+            if series_key in genre_map:
+                result = genre_map[series_key]
+            else:
+                result = {}
+                for gk, gv in genre_map.items():
+                    if series_key.startswith(gk) or gk.startswith(series_key):
+                        result = gv
+                        break
+            _series_cache[series_key] = result
+            return result
+
         for idx, row in df.iterrows():
-            key = row.get("title_key")
-            if key in genre_overrides:
-                override = genre_overrides[key]
-                if override.get("genre") and (pd.isna(row.get("genre")) or row.get("genre") == ""):
-                    df.at[idx, "genre"] = override["genre"]
-                if override.get("subgenre") and (pd.isna(row.get("subgenre")) or row.get("subgenre") == ""):
-                    df.at[idx, "subgenre"] = override["subgenre"]
+            series_key = normalize_title(str(row.get("series", "") or ""))
+            mapping = _lookup_series(series_key)
+            if not mapping:
+                continue
+            if mapping.get("genre") and (pd.isna(row.get("genre")) or row.get("genre") == ""):
+                df.at[idx, "genre"] = mapping["genre"]
+            if mapping.get("subgenre") and (pd.isna(row.get("subgenre")) or row.get("subgenre") == ""):
+                df.at[idx, "subgenre"] = mapping["subgenre"]
 
     return df
