@@ -117,9 +117,36 @@ def merge_opencritic_scores(master: pd.DataFrame, oc_df: pd.DataFrame) -> pd.Dat
 
     oc_cols = [c for c in ["title_key", "critic_score", "user_score", "oc_confidence", "oc_matched_title"]
                if c in oc_df.columns]
-    oc_slim = oc_df[oc_cols].drop_duplicates(subset=["title_key"])
+    oc_slim = oc_df[oc_cols].drop_duplicates(subset=["title_key"]).copy()
 
-    master = master.merge(oc_slim, on="title_key", how="left", suffixes=("", "_oc"))
+    # Rename score columns before merge to avoid suffix conflicts with Kaggle scores
+    oc_slim = oc_slim.rename(columns={"critic_score": "_oc_critic", "user_score": "_oc_user"})
+
+    master = master.merge(oc_slim, on="title_key", how="left")
+
+    # Scale Kaggle 0-10 critic scores to 0-100 to match OpenCritic range
+    if "critic_score" in master.columns:
+        kaggle_mask = master["critic_score"].notna() & (master["critic_score"] <= 10)
+        master.loc[kaggle_mask, "critic_score"] = master.loc[kaggle_mask, "critic_score"] * 10
+
+    # Fill critic_score / user_score from OpenCritic where still missing
+    if "_oc_critic" in master.columns:
+        if "critic_score" not in master.columns:
+            master["critic_score"] = master["_oc_critic"]
+        else:
+            master["critic_score"] = master["critic_score"].where(
+                master["critic_score"].notna(), master["_oc_critic"]
+            )
+        master = master.drop(columns=["_oc_critic"])
+
+    if "_oc_user" in master.columns:
+        if "user_score" not in master.columns:
+            master["user_score"] = master["_oc_user"]
+        else:
+            master["user_score"] = master["user_score"].where(
+                master["user_score"].notna(), master["_oc_user"]
+            )
+        master = master.drop(columns=["_oc_user"])
 
     master["oc_low_confidence"] = master.get(
         "oc_confidence", pd.Series(1.0, index=master.index)

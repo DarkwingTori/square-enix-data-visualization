@@ -91,6 +91,84 @@ def fetch_scores_for_title(title: str) -> dict:
     return base
 
 
+def load_opencritic_csv(raw_dir: Path, master_titles: list[str]) -> pd.DataFrame:
+    """
+    Load an OpenCritic rankings CSV (title, score, opencritic_classification,
+    platforms, release_date, url) and fuzzy-match against master_titles.
+    Returns a DataFrame in the same schema as fetch_opencritic_data().
+    """
+    candidates = list(raw_dir.glob("opencritic*.csv"))
+    if not candidates:
+        return _empty_oc_df()
+
+    path = candidates[0]
+    logger.info("Loading OpenCritic CSV: %s", path.name)
+    oc = pd.read_csv(path, low_memory=False)
+
+    # Normalise column names to lowercase
+    oc.columns = [c.lower().strip() for c in oc.columns]
+    if "title" not in oc.columns or "score" not in oc.columns:
+        logger.warning("OpenCritic CSV missing 'title' or 'score' column — skipping")
+        return _empty_oc_df()
+
+    oc["score"] = pd.to_numeric(oc["score"], errors="coerce")
+    oc = oc.dropna(subset=["title", "score"])
+    oc["title_key_csv"] = oc["title"].apply(normalize_title)
+
+    # Build a lookup dict: title_key → row for fast exact matching
+    csv_lookup: dict[str, dict] = {
+        row["title_key_csv"]: row for _, row in oc.iterrows()
+    }
+    csv_title_keys = list(csv_lookup.keys())
+
+    rows: list[dict] = []
+    unmatched = 0
+    for master_title in master_titles:
+        key = normalize_title(master_title)
+
+        # 1. Exact match
+        if key in csv_lookup:
+            matched_row = csv_lookup[key]
+            confidence = 1.0
+        else:
+            # 2. Prefix match — CSV title starts with our query
+            #    e.g. "dragon quest 11" matches "dragon quest 11 echoes of an elusive age"
+            prefix_matches = [
+                (ck, csv_lookup[ck]) for ck in csv_title_keys
+                if ck.startswith(key + " ") or ck.startswith(key + ":")
+            ]
+            if prefix_matches:
+                # Pick the shortest (most specific) prefix match
+                prefix_matches.sort(key=lambda x: len(x[0]))
+                best_csv_key, matched_row = prefix_matches[0]
+                confidence = 0.92
+            else:
+                # 3. Fuzzy fallback
+                best_key, confidence = best_fuzzy_match(key, csv_title_keys, threshold=CONFIDENCE_THRESHOLD)
+                if best_key is None:
+                    unmatched += 1
+                    continue
+                matched_row = csv_lookup[best_key]
+
+        rows.append({
+            "title": master_title,
+            "title_key": key,
+            "critic_score": matched_row["score"],
+            "user_score": None,
+            "oc_confidence": confidence,
+            "oc_matched_title": matched_row["title"],
+            "oc_classification": matched_row.get("opencritic_classification"),
+        })
+
+    logger.info(
+        "OpenCritic CSV: %d/%d titles matched (%d unmatched)",
+        len(rows), len(master_titles), unmatched,
+    )
+    if not rows:
+        return _empty_oc_df()
+    return pd.DataFrame(rows)
+
+
 def fetch_opencritic_data(titles: list[str], cache_path: Path) -> pd.DataFrame:
     # Load existing cache
     cache: dict[str, dict] = {}

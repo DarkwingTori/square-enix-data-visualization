@@ -28,7 +28,7 @@ from pipeline.config import DATA_RAW, DATA_PROCESSED, DATA_OUTPUT, OPENCRITIC_CA
 from pipeline.utils import setup_logging
 from pipeline.kaggle_loader import load_kaggle_csv, _empty_kaggle_df
 from pipeline.igdb_client import fetch_igdb_data, _empty_igdb_df, check_igdb_credentials, get_igdb_token, verify_company_ids
-from pipeline.opencritic_client import fetch_opencritic_data, _empty_oc_df
+from pipeline.opencritic_client import fetch_opencritic_data, load_opencritic_csv, _empty_oc_df
 from pipeline.wikipedia_scraper import fetch_wikipedia_data
 from pipeline.normalizer import run_all_normalizations
 from pipeline.merger import run_merge
@@ -107,19 +107,24 @@ def main() -> None:
     igdb_df   = run_all_normalizations(igdb_df)
     wiki_df   = run_all_normalizations(wiki_df)
 
-    # OpenCritic needs the full unique title list across all sources
+    # OpenCritic: collect full unique title list across all sources
+    all_titles = (
+        pd.concat([
+            kaggle_df["title"] if "title" in kaggle_df.columns else pd.Series(dtype=str),
+            igdb_df["title"]   if "title" in igdb_df.columns   else pd.Series(dtype=str),
+            wiki_df["title"]   if "title" in wiki_df.columns   else pd.Series(dtype=str),
+        ])
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
     if not args.skip_opencritic:
-        all_titles = (
-            pd.concat([
-                kaggle_df["title"] if "title" in kaggle_df.columns else pd.Series(dtype=str),
-                igdb_df["title"]   if "title" in igdb_df.columns   else pd.Series(dtype=str),
-                wiki_df["title"]   if "title" in wiki_df.columns   else pd.Series(dtype=str),
-            ])
-            .dropna()
-            .unique()
-            .tolist()
-        )
-        oc_df = fetch_opencritic_data(all_titles, OPENCRITIC_CACHE_PATH)
+        # Prefer local CSV over API — instant, no rate limits
+        oc_df = load_opencritic_csv(DATA_RAW, all_titles)
+        if oc_df.empty:
+            logger.info("No OpenCritic CSV found — fetching from API")
+            oc_df = fetch_opencritic_data(all_titles, OPENCRITIC_CACHE_PATH)
         if not oc_df.empty:
             sources_used.append("opencritic")
     else:
