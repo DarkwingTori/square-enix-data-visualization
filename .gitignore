@@ -1,0 +1,28 @@
+# Environment / credentials
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Data (raw files can be large; outputs are regenerated)
+data/raw/*.csv
+data/raw/*.json
+data/processed/*
+data/output/*
+
+# Keep gitkeep placeholders
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/output/.gitkeep
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
