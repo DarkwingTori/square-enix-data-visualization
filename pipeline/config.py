@@ -31,8 +31,8 @@ IGDB_COMPANY_IDS = {
 OUTPUT_SCHEMA_COLUMNS = [
     "title", "company_era", "developer", "series", "genre", "subgenre",
     "dimension", "platform", "platform_family", "platform_type",
-    "release_year", "region", "sales", "critic_score", "user_score",
-    "exclusivity_status", "nintendo_relationship_era", "japan_only",
+    "release_year", "region", "sales", "gross_revenue", "critic_score",
+    "user_score", "exclusivity_status", "nintendo_relationship_era", "japan_only",
 ]
 
 # --- Platform normalization ---

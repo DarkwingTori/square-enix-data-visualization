@@ -33,6 +33,7 @@ from pipeline.wikipedia_scraper import fetch_wikipedia_data
 from pipeline.normalizer import run_all_normalizations
 from pipeline.merger import run_merge
 from pipeline.reporter import run_reports
+from pipeline.manual_data import enrich_from_manual_data
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,9 @@ def main() -> None:
     # ----------------------------------------------------------------
     logger.info("=== Stage 3: Merge ===")
     final_df, review_df = run_merge(kaggle_df, igdb_df, oc_df, wiki_df)
+
+    logger.info("=== Stage 3b: Manual data enrichment ===")
+    final_df = enrich_from_manual_data(final_df)
 
     # Collect titles in master that were not matched to any enrichment source
     unmatched: list[str] = []
