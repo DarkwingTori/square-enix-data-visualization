@@ -143,9 +143,19 @@ def clean_release_year(df: pd.DataFrame) -> pd.DataFrame:
         if re.match(r"^\d{4}$", s):
             y = int(s)
             return y if 1970 <= y <= 2030 else None
+        # YYYY-MM-DD
         m = re.match(r"^(\d{4})-\d{2}-\d{2}$", s)
         if m:
             return int(m.group(1))
+        # DD-MM-YYYY  (e.g. "09-03-2010")
+        m = re.match(r"^\d{2}-\d{2}-(\d{4})$", s)
+        if m:
+            return int(m.group(1))
+        # MM/DD/YYYY or DD/MM/YYYY — take last 4-digit group
+        m = re.match(r"^\d{1,2}/\d{1,2}/(\d{4})$", s)
+        if m:
+            return int(m.group(1))
+        # "January 1997" or "Jan 1997"
         m = re.match(r"^\w+ (\d{4})$", s)
         if m:
             return int(m.group(1))

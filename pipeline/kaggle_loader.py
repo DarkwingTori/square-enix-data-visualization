@@ -16,22 +16,28 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "platform": ["Platform", "platform", "Console", "console"],
     "release_year": [
         "Year", "year", "Year_of_Release", "release_year",
-        "Year of Release", "YearOfRelease",
+        "Year of Release", "YearOfRelease", "release_date", "Release Date",
     ],
     "genre": ["Genre", "genre", "Category", "category"],
     "publisher": ["Publisher", "publisher", "Published_By"],
+    "developer": ["developer", "Developer", "Dev", "Developer(s)"],
+    "critic_score": ["critic_score", "Critic_Score", "Critic Score", "Score"],
     "na_sales": ["NA_Sales", "NA Sales", "na_sales", "North America", "NA"],
-    "eu_sales": ["EU_Sales", "EU Sales", "eu_sales", "Europe", "EU", "PAL_Sales"],
+    "eu_sales": ["EU_Sales", "EU Sales", "eu_sales", "Europe", "EU", "PAL_Sales", "pal_sales"],
     "jp_sales": ["JP_Sales", "JP Sales", "jp_sales", "Japan", "JP"],
     "other_sales": ["Other_Sales", "Other Sales", "other_sales", "Other", "Rest"],
     "global_sales": [
         "Global_Sales", "Global Sales", "global_sales", "Total", "World_Sales",
+        "total_sales", "Total_Sales",
     ],
 }
 
+# Optional fields — missing from some dataset versions, never fatal
+_OPTIONAL_FIELDS = {"global_sales", "other_sales", "developer", "critic_score"}
+
 REGION_LABELS = {
     "na_sales": "NA",
-    "eu_sales": "EU",
+    "eu_sales": "PAL",
     "jp_sales": "JP",
     "other_sales": "Other",
 }
@@ -63,8 +69,7 @@ def detect_columns(df: pd.DataFrame) -> dict[str, str]:
         if found:
             mapping[canonical] = found
         else:
-            # global_sales and other_sales are derived if absent — not fatal
-            if canonical not in ("global_sales", "other_sales"):
+            if canonical not in _OPTIONAL_FIELDS:
                 missing.append(canonical)
     if missing:
         raise ValueError(
@@ -116,7 +121,8 @@ def load_kaggle_csv(raw_dir: Path) -> pd.DataFrame:
 
 def _melt_regional_sales(df: pd.DataFrame) -> pd.DataFrame:
     """Convert wide regional sales to long format (one row per title+platform+region)."""
-    id_cols = [c for c in ["title", "platform", "release_year", "genre", "publisher"]
+    id_cols = [c for c in ["title", "platform", "release_year", "genre", "publisher",
+                           "developer", "critic_score"]
                if c in df.columns]
     region_cols = {k: v for k, v in REGION_LABELS.items() if k in df.columns}
 
@@ -149,5 +155,6 @@ def _melt_regional_sales(df: pd.DataFrame) -> pd.DataFrame:
 def _empty_kaggle_df() -> pd.DataFrame:
     return pd.DataFrame(columns=[
         "title", "platform", "release_year", "genre", "publisher",
-        "region", "sales", "sales_missing", "source", "title_key",
+        "developer", "critic_score", "region", "sales", "sales_missing",
+        "source", "title_key",
     ])
