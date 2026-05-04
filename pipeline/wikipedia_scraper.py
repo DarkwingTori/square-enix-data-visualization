@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 WIKIPEDIA_PAGES = {
     "Square Enix": "List of Square Enix video games",
-    "Squaresoft": "List of games developed by Square",
+    "Squaresoft": "List of Square video games",
     "Enix": "List of Enix games",
 }
 
